@@ -72,6 +72,8 @@
     border-radius: 8px; padding: 9px 14px; font-size: 13px; cursor: pointer; white-space: nowrap;
   }
   .deposit-edit button:hover { background: #e0e9fd; }
+  .deposit-edit button.alt { background: #f0f3fa; color: var(--text); border-color: var(--border); }
+  .deposit-edit button.alt:hover { background: #e4e9f5; }
 
   /* 金额构成（极简版） */
   .comp-mini { font-size: 13px; color: var(--muted); line-height: 2.1; }
@@ -291,6 +293,7 @@
       <div class="deposit-edit" id="depositEditBox">
         <input type="number" id="depositInput" step="0.01" min="0.01" placeholder="本月存入金额">
         <button type="button" id="btnAddDeposit">存入</button>
+        <button type="button" id="btnAdjust" class="alt" title="总金额填错了？点这里修正">✎ 调整</button>
       </div>
     </div>
   </section>
@@ -420,6 +423,26 @@
         <button type="button" class="btn-ghost" id="addBack">上一步</button>
         <button type="button" class="btn-primary" id="addSave">保存</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-mask" id="adjustMask">
+  <div class="modal add-modal">
+    <div class="add-head">
+      <span class="t">调整总金额</span>
+      <button type="button" class="add-close" id="adjustClose">✕</button>
+    </div>
+    <div class="comp-mini" style="margin-bottom:10px">
+      <div class="cm-total">当前总金额<b id="adjustCur">¥0.00</b></div>
+    </div>
+    <div class="add-field">
+      <label>输入正确的总金额（差额自动生成一笔「金额调整」，可删）</label>
+      <input type="number" id="adjustTarget" step="0.01" placeholder="0.00">
+    </div>
+    <div class="add-btns">
+      <button type="button" class="btn-ghost" id="adjustCancel">取消</button>
+      <button type="button" class="btn-primary" id="adjustSave">保存</button>
     </div>
   </div>
 </div>
@@ -613,20 +636,21 @@
   }
 
   function renderDeposit() {
-    // 按月结转：上月末余额结转 + 本月存入 + 本月收入 − 本月支出
-    var carry = 0, depMonth = 0, incMonth = 0, expMonth = 0, depCount = 0;
+    // 按月结转：上月末余额结转 + 本月存入 + 本月收入 − 本月支出 ± 调整
+    var carry = 0, depMonth = 0, incMonth = 0, expMonth = 0, adjMonth = 0, depCount = 0;
     records.forEach(function (r) {
       var m = r.date.slice(0, 7);
       if (m < filterMonth) {
-        if (r.type === "deposit" || r.type === "income") carry += r.amount;
+        if (r.type === "deposit" || r.type === "income" || r.type === "adjust") carry += r.amount;
         else carry -= r.amount;
       } else if (m === filterMonth) {
         if (r.type === "deposit") { depMonth += r.amount; depCount++; }
         else if (r.type === "income") incMonth += r.amount;
+        else if (r.type === "adjust") adjMonth += r.amount;
         else expMonth += r.amount;
       }
     });
-    var total = carry + depMonth + incMonth - expMonth;
+    var total = carry + depMonth + incMonth - expMonth + adjMonth;
     $("depositTitle").textContent = "💰 " + filterLabel() + "总金额（本月存入本月显示，下月自动结转）";
     var el = $("depositValue");
     el.textContent = (total < 0 ? "-" : "") + "¥" +
@@ -634,7 +658,8 @@
     el.className = "value" + (total < 0 ? " negative" : "");
     $("depositDetail").textContent =
       "上月结转 " + fmt(carry) + " ＋ 本月存入 " + fmt(depMonth) + "（" + depCount + " 笔）" +
-      " ＋ 本月收入 " + fmt(incMonth) + " − 本月支出 " + fmt(expMonth);
+      " ＋ 本月收入 " + fmt(incMonth) + " − 本月支出 " + fmt(expMonth) +
+      (adjMonth ? (adjMonth > 0 ? " ＋ 调整 " : " − 调整 ") + fmt(Math.abs(adjMonth)) : "");
   }
 
   var PALETTE = ["#2f6fed", "#18a058", "#f5a623", "#8e4ec6", "#00a2c7", "#e56f3e", "#e5484d", "#6b7280", "#3e9b4f", "#b569c9", "#5c7cfa", "#d4a017"];
@@ -643,17 +668,18 @@
   function renderComp() {
     var depTotal = 0;
     var incomeMap = {}, expenseMap = {};
-    var allIncome = 0, allExpense = 0;
+    var allIncome = 0, allExpense = 0, adjTotal = 0;
     records.forEach(function (r) {
       if (r.type === "deposit") { depTotal += r.amount; }
       else if (r.type === "income") { incomeMap[r.category] = (incomeMap[r.category] || 0) + r.amount; allIncome += r.amount; }
       else if (r.type === "expense") { expenseMap[r.category] = (expenseMap[r.category] || 0) + r.amount; allExpense += r.amount; }
+      else if (r.type === "adjust") { adjTotal += r.amount; }
     });
     var card = $("compCard");
-    if (!depTotal && !allIncome && !allExpense) { card.style.display = "none"; return; }
+    if (!depTotal && !allIncome && !allExpense && !adjTotal) { card.style.display = "none"; return; }
     card.style.display = "";
 
-    var total = depTotal + allIncome - allExpense;
+    var total = depTotal + allIncome - allExpense + adjTotal;
     var elTotal = $("compTotal");
     elTotal.textContent = (total < 0 ? "-" : "") + fmt(Math.abs(total));
     elTotal.className = total < 0 ? "neg" : "";
@@ -663,7 +689,8 @@
         .slice(0, n).map(function (k) { return k + " " + fmt(map[k]); }).join(" · ");
     };
     $("compSrc").innerHTML = "来源　<b>累计存入 " + fmt(depTotal) + "</b>" +
-      (allIncome ? " ＋ 收入 " + fmt(allIncome) : "");
+      (allIncome ? " ＋ 收入 " + fmt(allIncome) : "") +
+      (adjTotal ? (adjTotal > 0 ? " ＋ 调整 " : " − 调整 ") + "<b>" + fmt(Math.abs(adjTotal)) + "</b>" : "");
     $("compUse").innerHTML = "支出　<b>" + fmt(allExpense) + "</b>" +
       (allExpense ? "<br>大头　" + topNames(expenseMap, 3) : "");
   }
@@ -771,13 +798,16 @@
     items.forEach(function (r) {
       var row = document.createElement("div");
       row.className = "record";
+      var isAdj = r.type === "adjust";
+      var neg = r.type === "expense" || (isAdj && r.amount < 0);
+      var absAmt = isAdj ? Math.abs(r.amount) : r.amount;
       row.innerHTML =
-        '<div class="icon">' + (CAT_ICONS[r.category] || (r.type === "expense" ? "📦" : "💰")) + "</div>" +
+        '<div class="icon">' + (isAdj ? "✏️" : (CAT_ICONS[r.category] || (r.type === "expense" ? "📦" : "💰"))) + "</div>" +
         '<div class="info"><div class="cat">' + r.category + "</div>" +
         (r.note ? '<div class="note">' + escapeHtml(r.note) + "</div>" : "") + "</div>" +
-        '<div class="amount ' + (r.type === "expense" ? "expense" : "income") + '"></div>';
-      row.querySelector(".amount").textContent = (r.type === "expense" ? "-" : "+") + "¥" +
-        Number(r.amount).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        '<div class="amount ' + (neg ? "expense" : "income") + '"></div>';
+      row.querySelector(".amount").textContent = (neg ? "-" : "+") + "¥" +
+        Number(absAmt).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       var del = document.createElement("button");
       del.className = "del";
       del.textContent = "✕";
@@ -994,6 +1024,53 @@
     addDeposit(v);
     $("depositInput").value = "";
     showToast("已存入，计入 " + filterLabel());
+    renderAll();
+  });
+
+  // ===== 调整总金额：输入正确总额，差额生成一笔 adjust 记录 =====
+  function netTotal() {
+    var t = 0;
+    records.forEach(function (r) {
+      if (r.type === "expense") t -= r.amount;
+      else t += r.amount; // deposit / income / adjust（adjust 为有符号金额）
+    });
+    return t;
+  }
+  function openAdjust() {
+    var cur = netTotal();
+    $("adjustCur").textContent = (cur < 0 ? "-" : "") + "¥" +
+      Number(Math.abs(cur)).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    $("adjustTarget").value = cur.toFixed(2);
+    $("adjustMask").className = "modal-mask show";
+    setTimeout(function () { $("adjustTarget").focus(); $("adjustTarget").select(); }, 60);
+  }
+  function closeAdjust() { $("adjustMask").className = "modal-mask"; }
+  $("btnAdjust").addEventListener("click", openAdjust);
+  $("adjustClose").addEventListener("click", closeAdjust);
+  $("adjustCancel").addEventListener("click", closeAdjust);
+  $("adjustMask").addEventListener("click", function (e) { if (e.target === this) closeAdjust(); });
+  $("adjustSave").addEventListener("click", function () {
+    var target = parseFloat($("adjustTarget").value);
+    if (isNaN(target)) { showToast("请输入正确的金额"); return; }
+    var cur = netTotal();
+    var delta = Math.round((target - cur) * 100) / 100;
+    if (delta === 0) { showToast("总金额没变"); closeAdjust(); return; }
+    // 调整记录归属当前日历选中的那天（不在当前月则记到今天），可在当天明细里删除
+    var adjDate = (selDay && selDay.slice(0, 7) === filterMonth) ? selDay : todayStr();
+    records.push({
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      type: "adjust",
+      amount: delta,
+      category: "金额调整",
+      note: "总金额修正 " + fmt(Math.abs(delta)),
+      date: adjDate
+    });
+    save();
+    filterYear = adjDate.slice(0, 4);
+    filterMonth = adjDate.slice(0, 7);
+    selDay = adjDate;
+    closeAdjust();
+    showToast("已调整 " + (delta > 0 ? "+" : "-") + fmt(Math.abs(delta)) + "，记入 " + adjDate.replace(/-/g, "/"));
     renderAll();
   });
 
