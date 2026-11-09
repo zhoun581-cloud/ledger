@@ -1,6 +1,6 @@
 // Service Worker：缓存全部应用资源，离线可用
 // 版本号变更（CACHE v2 → v3 …）后旧缓存自动清理，用于发新版本
-var CACHE = "ledger-v1";
+var CACHE = "ledger-v2";
 var ASSETS = [
   "./",
   "./index.html",
